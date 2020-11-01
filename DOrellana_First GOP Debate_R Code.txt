@@ -1,0 +1,215 @@
+library(ibmdbR)
+
+dsn_driver <- c("BLUDB")
+dsn_database <- c("BLUDB")
+dsn_hostname <- c("dashdb-txn-sbox-yp-dal09-04.services.dal.bluemix.net")
+dsn_port <- "50000"
+dsn_protocol <- "TCPIP"
+dsn_uid <- c("pmm36106")
+dsn_pwd <- c("c25@hlm26mn8d8t6")
+
+conn_path <- paste(dsn_driver,  
+                   ";DATABASE=",dsn_database,
+                   ";HOSTNAME=",dsn_hostname,
+                   ";PORT=",dsn_port,
+                   ";PROTOCOL=",dsn_protocol,
+                   ";UID=",dsn_uid,
+                   ";PWD=",dsn_pwd,sep="")
+mycon <- idaConnect(conn_path) 
+idaInit(mycon)
+
+#Read the data from database
+SENTIMENT <- idaQuery("SELECT * from FIRST_GOP_DEBATE")
+
+#Check the row counts
+nrow(SENTIMENT)
+idadf(mycon, "SELECT count(*) FROM FIRST_GOP_DEBATE")
+
+#Check the connect pathway
+ls()
+
+# dimension of the dataset
+dim(SENTIMENT) 
+
+#List the database tables
+idaShowTables()
+#List the database tables that contain GOP in the name
+idaShowTables(matchStr='GOP')
+#To check if the table exists
+idaExistTable('FIRST_GOP_DEBATE')
+
+#number of tweets per sentiment
+table(SENTIMENT$SENTIMENT)
+idadf(mycon, "SELECT SENTIMENT, 
+      count(1) COUNT 
+      FROM FIRST_GOP_DEBATE 
+      GROUP BY SENTIMENT")
+
+#number of tweets per Candidate
+table(SENTIMENT$CANDIDATE)
+
+#number of tweets per sentiment by Candidate
+table(SENTIMENT$CANDIDATE, SENTIMENT$SENTIMENT)
+
+#Number of tweets by Candidate per Subject Matter
+table(SENTIMENT$SUBJECT_MATTER, SENTIMENT$CANDIDATE)
+
+#Pie charts
+#Reset the margin
+par(mar=c(1,1,1,1))
+#Use default colors
+pie (table(SENTIMENT$CANDIDATE))
+#Change colors
+pie (table(SENTIMENT$CANDIDATE), col=c("blue", "yellow", "green", "purple", "pink", "orange"))
+
+#load the plyr package
+library("plyr")
+#List the most common subject
+reasonCounts<-na.omit(plyr::count(SENTIMENT$SUBJECT_MATTER))
+reasonCounts<-reasonCounts[order(reasonCounts$freq, decreasing=TRUE), ]
+reasonCounts
+
+
+# Using ggplot2 package
+# Complaints frequency plot
+library(ggplot2)
+wf <- data.frame(reasonCounts)
+p <- ggplot(wf, aes(wf$x, wf$freq))
+p <- p + geom_bar(stat="identity")
+p <- p + theme(axis.text.x=element_text(angle=45, hjust=1))
+p
+
+
+
+#Number of retweets per subject matter
+ddply(SENTIMENT, ~ SUBJECT_MATTER, summarize, numRetweets = sum(RETWEET_COUNT, na.rm = TRUE))
+
+#Posts that have 6 retweets
+as.character(subset(SENTIMENT, RETWEET_COUNT ==6)$TEXT)
+
+#number of posts per day
+posts<-as.Date(SENTIMENT$TWEET_CREATED, tryFormats = c("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y"),optional = FALSE)
+table(posts)
+#day with the maximum number of posts
+table(posts)[which.max(table(posts))]
+
+#number of posts per day by sentiment plot
+library (dplyr)
+drs <- idadf(mycon, "SELECT TWEET_CREATED, SENTIMENT
+             FROM FIRST_GOP_DEBATE")
+drs$TWEET_CREATED<- as.Date(drs$TWEET_CREATED, tryFormats = c("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y"),optional = FALSE)
+# Calculate and plot number of tweets per day by Candidate
+ByDateBySent <- drs %>% group_by(SENTIMENT,TWEET_CREATED) %>% dplyr::summarise(count = n())
+ByDateBySentPlot = ggplot() + geom_line(data=ByDateBySent, aes(x=TWEET_CREATED, y=count, group =SENTIMENT , color=SENTIMENT)) 
+ByDateBySentPlot
+
+#Apriori rules method
+dfa<-SENTIMENT[ , c('CANDIDATE', 'SENTIMENT',  'SUBJECT_MATTER',  'RETWEET_COUNT', 'USER_TIMEZONE')]
+dfa$CANDIDATE<-as.factor(dfa$CANDIDATE)
+dfa$SENTIMENT<-as.factor(dfa$SENTIMENT)
+dfa$SUBJECT_MATTER<-as.factor(dfa$SUBJECT_MATTER)
+dfa$USER_TIMEZONE<-as.factor(dfa$USER_TIMEZONE)
+
+dfa$RETWEET_COUNT<-cut(dfa$RETWEET_COUNT, breaks=c(0, 1, 2, Inf), right=F, labels=c("0", "1",  "2+"))
+
+rules<-apriori(dfa)
+arules::inspect(rules[1:2])
+
+
+#Text Mining
+
+#Load the packages in memory
+library("tm")
+library("wordcloud")
+library ("SnowballC")
+
+#Load the tweets with positive sentiment into the data frame positive
+positive <- idadf(mycon, "SELECT 
+                  TEXT FROM FIRST_GOP_DEBATE 
+                  WHERE SENTIMENT='Positive'")
+
+
+docs<-VectorSource(positive$TEXT)
+docs<-Corpus(docs)
+inspect(docs[[1]])
+inspect(docs[[2]])
+inspect(docs[[20]])
+
+#Strip the white space
+docs <- tm_map(docs, stripWhitespace)
+
+#Remove the URLs
+removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+docs <- tm_map(docs, content_transformer(removeURL))
+
+#Remove non ASCII character
+removeInvalid<-function(x) gsub("[^\x01-\x7F]", "", x)
+docs <- tm_map(docs, content_transformer(removeInvalid))
+
+#Remove punctuation
+docs <- tm_map(docs, removePunctuation)
+
+#remove the numbers
+docs <- tm_map(docs, removeNumbers)
+docs <- tm_map(docs, tolower)
+
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+docs <- tm_map(docs, toSpace, "@")   #Remove @
+docs <- tm_map(docs, toSpace, "/")   #Remove /
+docs <- tm_map(docs, toSpace, "\\|") #Remove |
+
+
+#Remove the stop word
+docs <- tm_map(docs, removeWords, stopwords("english"))
+docs <- tm_map(docs, removeWords, stopwords("SMART"))
+
+
+docs <- tm_map(docs, stemDocument)
+
+
+#Remove the white space introduced during the pre-processing
+docs <- tm_map(docs, stripWhitespace)
+dtm <- DocumentTermMatrix(docs)
+
+m <- as.matrix(dtm)   #Convert dtm to a matrix
+dim(m)                # Display number of terms and number of documents
+View(m[1:10, 1:10])   # Preview the first 10 rows and the first 10 columns in m
+
+#find the terms that appear at least 50 times
+findFreqTerms(dtm, lowfreq=50)
+
+#find the terms asosciated with good and great with correlation at least 0.15
+findAssocs(dtm, c("great", "good"), corlimit=0.15)
+
+dtms <- removeSparseTerms(dtm, 0.6) # Prepare the data (max 60% empty space)   
+freq <- colSums(as.matrix(dtm)) # Find word frequencies   
+
+
+# frequent terms and their associations
+findFreqTerms(dtm, lowfreq = 100)
+
+
+#Word Cloud
+dark2 <- brewer.pal(6, "Dark2")   
+wordcloud(names(freq), freq, min.freq=100, max.words=1000, rot.per=0.5, scale=c(1.8, 2.0), colors=dark2)  
+
+# Association with trump
+findAssocs(dtm, terms = "trump", corlimit = 0.5)
+
+# Association with gopdeb
+findAssocs(dtm, terms = "gopdeb", corlimit = 0.3)
+
+# inspect frequent words 
+freq.terms <- dtm %>% findFreqTerms(lowfreq = 100) %>% print
+term.freq <- dtm %>% as.matrix() %>% rowSums() 
+term.freq <- term.freq %>% subset(term.freq >= 16) 
+df <- data.frame(term = names(term.freq), freq = term.freq)
+
+df<-df[order(df$freq,decreasing = TRUE),]
+
+# plot frequent words
+ggplot(df, aes(x=term, y=freq)) + geom_bar(stat="identity") + 
+  xlab("Terms") + ylab("Count") + coord_flip() + 
+  theme(axis.text=element_text(size=15)) + ggtitle("Frequency Terms")
+
+# End of Scirpt 
