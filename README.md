@@ -10,4 +10,4 @@ Tools: R Studio on Watson Studio <img align="left" alt="RStudio" width="26px" sr
 <img align="left" alt="Watson Studio" width="26px" src="https://cache.globalcatalog.cloud.ibm.com/api/v1/39ba9d4c-b1c5-4cc3-a163-38b580121e01/artifacts/cache/3a58e03b24ca5cfe0195ae72fd7c5401-public/watson-studio-light.svg" />
 
 
- Overall purpose is to discover tweets' sentiment data from the First GOP Debate using RStudio on Watson Studio.
+ Overall purpose is to discover tweets' sentiment data from the first 2015 GOP Debate using RStudio on Watson Studio.
